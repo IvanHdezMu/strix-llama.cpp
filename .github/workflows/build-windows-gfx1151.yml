@@ -1,0 +1,174 @@
+name: Build Windows ROCm gfx1151
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    env:
+      ROCM_VERSION: "10.0.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y
+
+      # ------------------------------------------------------------
+      # Build normal Windows executables
+      # ------------------------------------------------------------
+      - name: Configure CPU / host binaries
+        shell: pwsh
+        run: |
+          cmake -S . -B build-cpu `
+            -G "Ninja Multi-Config" `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_NATIVE=OFF `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_OPENSSL=OFF `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_TOOLS=ON
+
+      - name: Build llama-server and llama-cli
+        shell: pwsh
+        run: |
+          cmake --build build-cpu `
+            --config Release `
+            --parallel $env:NUMBER_OF_PROCESSORS `
+            --target llama-server llama-cli
+
+      # ------------------------------------------------------------
+      # Setup ROCm in the disposable GitHub runner
+      # ------------------------------------------------------------
+      - name: Setup ROCm
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.ROCM_VERSION }}
+
+      - name: Setup ROCm environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+          rocm-sdk init
+          if ($LASTEXITCODE -ne 0) {
+            throw "rocm-sdk init failed"
+          }
+
+          $rocmPath = (rocm-sdk path --root).Trim()
+          $cmakePath = (rocm-sdk path --cmake).Trim()
+          $binPath = (rocm-sdk path --bin).Trim()
+
+          Write-Host "ROCm root: $rocmPath"
+          Write-Host "ROCm bin:  $binPath"
+
+          "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          "CMAKE_PREFIX_PATH=$cmakePath" >> $env:GITHUB_ENV
+          "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
+          "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
+          "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
+
+          "$binPath" >> $env:GITHUB_PATH
+          "C:\TheRock\build\.venv\Scripts" >> $env:GITHUB_PATH
+
+      # ------------------------------------------------------------
+      # Build ONLY the gfx1151 HIP backend
+      # ------------------------------------------------------------
+      - name: Configure HIP gfx1151
+        shell: pwsh
+        run: |
+          cmake -S . -B build-hip `
+            -G "Ninja Multi-Config" `
+            -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_CPU=OFF `
+            -DGGML_HIP=ON `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
+            -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DCMAKE_C_FLAGS="-Wno-error=incompatible-pointer-types" `
+            -DHIP_PATH="${env:HIP_PATH}" `
+            -DAMDGPU_TARGETS="gfx1151"
+
+      - name: Build HIP backend
+        shell: pwsh
+        run: |
+          cmake --build build-hip `
+            --config Release `
+            --parallel $env:NUMBER_OF_PROCESSORS `
+            --target ggml-hip
+
+      - name: Verify HIP backend
+        shell: pwsh
+        run: |
+          $hip = Get-ChildItem build-hip\bin\Release -Filter "ggml-hip*.dll"
+          if (-not $hip) {
+            throw "ggml-hip.dll was not produced"
+          }
+          $hip | Format-Table FullName, Length
+
+      # ------------------------------------------------------------
+      # Create portable package
+      # ------------------------------------------------------------
+      - name: Assemble portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          # normal llama.cpp executables and libraries
+          Copy-Item build-cpu\bin\Release\* dist\ -Force
+
+          # gfx1151 HIP backend
+          Copy-Item build-hip\bin\Release\ggml-hip*.dll dist\ -Force
+
+          # Matching ROCm core DLLs.
+          # These must live beside llama-server.exe so Windows does not
+          # accidentally load a different amdhip DLL from System32.
+          $binPath = (rocm-sdk path --bin).Trim()
+
+          foreach ($dll in @(
+            "amdhip64_7.dll",
+            "rocm_kpack.dll",
+            "amd_comgr.dll"
+          )) {
+            $src = Join-Path $binPath $dll
+            if (-not (Test-Path $src)) {
+              throw "Missing ROCm runtime DLL: $dll"
+            }
+            Copy-Item $src dist\ -Force
+          }
+
+          Copy-Item LICENSE dist\LICENSE.txt -Force
+
+          @"
+          strix-llama.cpp
+          Git commit: $env:GITHUB_SHA
+          ROCm:       $env:ROCM_VERSION
+          GPU target: gfx1151
+          Build:      Windows x64 / HIP
+          "@ | Set-Content dist\BUILD_INFO.txt
+
+          Write-Host "`n=== PACKAGE ==="
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v6
+        with:
+          name: strix-llama-win-rocm-gfx1151
+          path: dist/*
+          retention-days: 14
