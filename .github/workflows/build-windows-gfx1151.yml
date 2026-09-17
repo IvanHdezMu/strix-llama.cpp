@@ -1,0 +1,238 @@
+name: Build Windows ROCm gfx1151
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: strix-windows-rocm-gfx1151
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+jobs:
+  ui-build:
+    uses: ./.github/workflows/ui-build.yml
+
+  windows-cpu:
+    name: windows-cpu / x64
+    needs: [ui-build]
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: strix-windows-2025-vs2026-x64-cpu
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP_FETCH=ON ^
+            %CMAKE_ARGS%
+          cmake --build build --config Release
+
+      - name: Pack CPU artifact
+        run: |
+          7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
+
+      - name: Upload CPU artifact
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-cpu-x64.zip
+          name: llama-bin-win-cpu-x64.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: strix-windows-2025-vs2026-x64-cpu
+
+  windows-rocm:
+    name: windows-rocm / gfx1151
+    runs-on: windows-2022
+
+    env:
+      ROCM_VERSION: "10.0.0"
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: strix-windows-rocm-${{ env.ROCM_VERSION }}-gfx1151
+          evict-old-files: 1d
+          max-size: "1G"
+
+      - name: Setup ROCm
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.ROCM_VERSION }}
+
+      - name: Setup ROCm Environment
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+          rocm-sdk init
+          if ($LASTEXITCODE -ne 0) { throw "rocm-sdk init failed with exit code $LASTEXITCODE" }
+
+          $rocmPath = (rocm-sdk path --root)
+          if (-not $rocmPath) { throw "rocm-sdk path --root returned empty - devel package may not be installed" }
+          $rocmPath = $rocmPath.Trim()
+          $cmakePath = (rocm-sdk path --cmake).Trim()
+          $binPath = (rocm-sdk path --bin).Trim()
+
+          Write-Host "ROCm root: $rocmPath"
+          Write-Host "CMake path: $cmakePath"
+          Write-Host "Bin path: $binPath"
+
+          echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$cmakePath" >> $env:GITHUB_ENV
+          echo "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
+          echo "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
+          echo "$binPath" >> $env:GITHUB_PATH
+          echo "C:\TheRock\build\.venv\Scripts" >> $env:GITHUB_PATH
+
+      - name: Build HIP backend for gfx1151
+        run: |
+          cmake -S . -B build `
+            -G "Ninja Multi-Config" `
+            -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_CPU=OFF `
+            -DGGML_HIP=ON `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
+            -DCMAKE_C_FLAGS="-Wno-error=incompatible-pointer-types" `
+            -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DHIP_PATH="${env:HIP_PATH}" `
+            -DAMDGPU_TARGETS="gfx1151"
+          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS} --target ggml-hip
+
+      - name: Verify HIP backend was built
+        run: |
+          $hipDll = Get-ChildItem -Path build\bin\Release -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
+          if (-not $hipDll) {
+            Write-Host "##[error]ggml-hip*.dll was NOT produced."
+            Get-ChildItem build\bin\Release | Format-Table -AutoSize
+            exit 1
+          }
+          $hipDll | Format-Table FullName, Length -AutoSize
+
+      - name: Bundle matching HIP runtime DLLs
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binPath = (rocm-sdk path --bin).Trim()
+          if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
+
+          $patterns = @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")
+          foreach ($pattern in $patterns) {
+            $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
+            if (-not $files) { throw "no match for $pattern in $binPath" }
+            foreach ($f in $files) {
+              Copy-Item $f.FullName -Destination build\bin\Release -Force
+              Write-Host "copied $($f.Name)"
+            }
+          }
+
+      - name: Pack ROCm artifact
+        run: |
+          7z a -snl llama-bin-win-rocm-10.0-gfx1151-x64.zip `
+            .\build\bin\Release\ggml-hip.dll `
+            .\build\bin\Release\amdhip64_7.dll `
+            .\build\bin\Release\rocm_kpack.dll `
+            .\build\bin\Release\amd_comgr.dll
+
+      - name: Upload ROCm artifact
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-rocm-10.0-gfx1151-x64.zip
+          name: llama-bin-win-rocm-10.0-gfx1151-x64.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: strix-windows-rocm-${{ env.ROCM_VERSION }}-gfx1151
+
+  package:
+    name: package portable build
+    needs: [windows-cpu, windows-rocm]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download CPU artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-bin-win-cpu-x64.zip
+          path: artifact/cpu
+
+      - name: Download ROCm artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-bin-win-rocm-10.0-gfx1151-x64.zip
+          path: artifact/rocm
+
+      - name: Merge CPU and ROCm files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          unzip artifact/cpu/llama-bin-win-cpu-x64.zip -d dist
+          unzip -o artifact/rocm/llama-bin-win-rocm-10.0-gfx1151-x64.zip -d dist
+
+          cat > dist/BUILD_INFO.txt <<EOF
+          Repository: $GITHUB_REPOSITORY
+          Commit:     $GITHUB_SHA
+          Backend:    ROCm/HIP
+          ROCm:       10.0.0
+          GPU target: gfx1151
+          Platform:   Windows x64
+          EOF
+
+          (cd dist && zip -r ../strix-llama-win-rocm-gfx1151.zip .)
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v6
+        with:
+          name: strix-llama-win-rocm-gfx1151
+          path: strix-llama-win-rocm-gfx1151.zip
+          retention-days: 14
