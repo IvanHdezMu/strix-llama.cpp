@@ -1,20 +1,7 @@
 # Same as lemonade-sdk/llamacpp-rocm (MIT). Needs self-hosted runners labelled stx-halo + Windows/Linux.
 name: Test Llama.cpp + ROCm
 on:
-  workflow_dispatch:
-    inputs:
-      operating_systems:
-        description: 'Operating systems to test on (comma-separated: windows,ubuntu)'
-        required: false
-        default: 'windows,ubuntu'
-      gfx_target:
-        description: 'AMD GPU targets (comma-separated)'
-        required: false
-        default: 'gfx1151'
-      release_tag:
-        description: 'Release tag to test (e.g., b1001) or "latest" for the most recent release'
-        required: false
-        default: 'latest'
+  workflow_dispatch: # allows manual triggering
 
 env:
   OPERATING_SYSTEMS: ${{ github.event.inputs.operating_systems || 'windows,ubuntu' }}

@@ -6,46 +6,7 @@
 # are registered.
 name: Build Llama.cpp + ROCm
 on:
-  workflow_dispatch:
-    inputs:
-      operating_systems:
-        description: 'Operating systems to build for (comma-separated: windows,ubuntu)'
-        required: false
-        default: 'ubuntu'
-      gfx_target:
-        description: 'AMD GPU targets (comma-separated; this fork supports Strix Halo / gfx1151 only)'
-        required: false
-        default: 'gfx1151'
-      rocm_version:
-        description: 'ROCm version to use (e.g., 7.13.0a20260318) or "latest" to auto-detect'
-        required: false
-        default: 'latest'
-      llamacpp_version:
-        description: 'Branch or tag of this repository to build, or "latest" for master'
-        required: false
-        default: 'latest'
-      vulkan:
-        description: 'Also build the Linux Vulkan zip'
-        required: false
-        default: true
-        type: boolean
-      create_release:
-        description: 'Create a GitHub release after successful build'
-        required: false
-        default: true
-        type: boolean
-
-  # Trigger on pushes to pull requests that change the release pipeline
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/build-llamacpp-rocm.yml'
-      - '.github/actions/test-llamacpp-build/**'
-      - 'scripts/rocm-release/**'
-
-  # Release every merge to master
-  push:
-    branches: [master]
+  workflow_dispatch: # allows manual triggering
 
 # a newer merge supersedes a release that is still building
 concurrency:

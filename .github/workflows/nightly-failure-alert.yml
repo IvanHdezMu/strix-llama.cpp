@@ -1,9 +1,7 @@
 # Same as lemonade-sdk/llamacpp-rocm (MIT).
 name: Nightly Failure Alert
 on:
-  workflow_run:
-    workflows: ["Build Llama.cpp + ROCm"]
-    types: [completed]
+  workflow_dispatch: # allows manual triggering
 
 env:
   # GitHub user(s) to alert, space-separated

@@ -65,40 +65,7 @@
 name: Benchmark gfx1151 (on-demand)
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Branch, tag or SHA to build and benchmark'
-        required: false
-        default: 'master'
-      backend:
-        description: 'GPU backend to build and test'
-        required: true
-        default: 'hip'
-        type: choice
-        options: [hip, vulkan]
-      models:
-        description: 'Comma-separated subset of flash-next,qwen38-27b,ornith-35b-a3b'
-        required: false
-        default: 'flash-next,qwen38-27b,ornith-35b-a3b'
-      reps:
-        description: 'llama-bench repetitions per test (-r)'
-        required: false
-        default: '5'
-      mem_margin_gib:
-        description: 'GiB held back for KV cache and compute buffers when deciding if a model fits'
-        required: false
-        default: '16'
-      skip_ops:
-        description: 'Skip test-backend-ops'
-        required: false
-        default: false
-        type: boolean
-      skip_bench:
-        description: 'Skip llama-bench'
-        required: false
-        default: false
-        type: boolean
+  workflow_dispatch: # allows manual triggering
 
 permissions:
   contents: read

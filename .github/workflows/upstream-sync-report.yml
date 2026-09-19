@@ -5,9 +5,7 @@ name: Upstream sync report
 # Note: */3 restarts on the 1st of each month, so two runs can be one to three days apart at month end.
 
 on:
-  schedule:
-    - cron: '0 6 */3 * *'
-  workflow_dispatch:
+  workflow_dispatch: # allows manual triggering
 
 permissions:
   contents: read
