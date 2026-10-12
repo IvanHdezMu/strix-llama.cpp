@@ -1,7 +1,4 @@
-# Syncing halo-box/strix-llama.cpp with upstream
-
-`upstream` is [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Until 2026-10 this fork synced
-through halo-box/llama.cpp, which is now archived; merge `upstream/master` directly.
+# Syncing halo-box/llama.cpp with upstream
 
 ## Why GitHub says "N commits behind" after a sync
 
