@@ -35,13 +35,50 @@
 #endif
 #endif
 
+// isatty
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 //
 // downloader
 //
 
+// validate repo name format: owner/repo
+static void write_file(const std::string & fname, const std::string & content) {
+    const std::string fname_tmp = fname + ".tmp";
+    std::ofstream     file(fname_tmp);
+    if (!file) {
+        throw std::runtime_error(string_format("error: failed to open file '%s'\n", fname.c_str()));
+    }
+
+    try {
+        file << content;
+        file.close();
+
+        // Makes write atomic
+        if (rename(fname_tmp.c_str(), fname.c_str()) != 0) {
+            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, fname_tmp.c_str(), fname.c_str());
+            // If rename fails, try to delete the temporary file
+            if (remove(fname_tmp.c_str()) != 0) {
+                LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, fname_tmp.c_str());
+            }
+        }
+    } catch (...) {
+        // If anything fails, try to delete the temporary file
+        if (remove(fname_tmp.c_str()) != 0) {
+            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, fname_tmp.c_str());
+        }
+
+        throw std::runtime_error(string_format("error: failed to write file '%s'\n", fname.c_str()));
+    }
+}
+
 static void write_etag(const std::string & path, const std::string & etag) {
     const std::string etag_path = path + ".etag";
-    fs_write_atomic(std::filesystem::u8path(etag_path), etag);
+    write_file(etag_path, etag);
     LOG_DBG("%s: file etag saved: %s\n", __func__, etag_path.c_str());
 }
 
@@ -90,7 +127,11 @@ class ProgressBar : public common_download_callback {
     }
 
     static bool is_output_a_tty() {
-        return common_is_tty(stdout);
+#if defined(_WIN32)
+        return _isatty(_fileno(stdout));
+#else
+        return isatty(1);
+#endif
     }
 
 public:
@@ -230,12 +271,6 @@ static bool common_pull_file(httplib::Client & cli,
                 __func__,
                 httplib::to_string(res.error()).c_str(),
                 res ? res->status : -1);
-        return false;
-    }
-
-    ofs.close();
-    if (!ofs) {
-        LOG_ERR("%s: error closing file: %s\n", __func__, path_tmp.c_str());
         return false;
     }
 

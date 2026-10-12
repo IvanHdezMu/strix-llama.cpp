@@ -234,27 +234,29 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     // 1. evaluate full prompt on draft model
     {
         const int32_t n_batch_dft = llama_n_batch(ctx_dft);
-        common_batch batch_prompt(ctx_dft);
+        llama_batch batch_prompt = llama_batch_init(std::min((int32_t) prompt.size(), n_batch_dft), 0, 1);
 
         for (int32_t i = 0; i < (int32_t) prompt.size(); i += n_batch_dft) {
             const int32_t n_eval = std::min((int32_t) prompt.size() - i, n_batch_dft);
-            batch_prompt.clear();
+            common_batch_clear(batch_prompt);
 
             for (int32_t j = 0; j < n_eval; ++j) {
                 const int32_t idx = i + j;
                 const bool is_last = (idx == (int32_t) prompt.size() - 1);
-                batch_prompt.add(prompt[idx], (llama_pos) idx, seq_id, is_last);
+                common_batch_add(batch_prompt, prompt[idx], (llama_pos) idx, { seq_id }, is_last);
             }
 
-            const int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_prompt.get());
+            const int ret = llama_decode(ctx_dft, batch_prompt);
             if (ret != 0) {
                 SPF_ERR("failed to decode prompt on draft model, ret = %d\n", ret);
+                llama_batch_free(batch_prompt);
                 res.kept_indices.resize(prompt.size());
                 std::iota(res.kept_indices.begin(), res.kept_indices.end(), 0);
                 res.n_prompt_kept = (int32_t) res.kept_indices.size();
                 return res;
             }
         }
+        llama_batch_free(batch_prompt);
     }
 
     const auto t_prefill_end = ggml_time_us();
@@ -269,7 +271,7 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     // attach callback
     llama_set_eval_callback(ctx_dft, cb_collect_attn, &cb_data);
 
-    common_batch batch_decode(ctx_dft);
+    llama_batch batch_decode = llama_batch_init(1, 0, 1);
 
     int32_t actual_steps = 0;
     int32_t cur_pos = (int32_t) prompt.size();
@@ -284,10 +286,10 @@ common_speculative_prefill_result common_speculative_prefill_execute(
             break;
         }
 
-        batch_decode.clear();
-        batch_decode.add(token_id, cur_pos++, seq_id, true);
+        common_batch_clear(batch_decode);
+        common_batch_add(batch_decode, token_id, cur_pos++, { seq_id }, true);
 
-        const int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_decode.get());
+        const int ret = llama_decode(ctx_dft, batch_decode);
         if (ret != 0) {
             SPF_ERR("failed lookahead decode step %d, ret = %d\n", k, ret);
             break;
@@ -307,6 +309,7 @@ common_speculative_prefill_result common_speculative_prefill_execute(
         }
     }
 
+    llama_batch_free(batch_decode);
 
     // detach callback
     llama_set_eval_callback(ctx_dft, nullptr, nullptr);
