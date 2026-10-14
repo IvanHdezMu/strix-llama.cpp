@@ -62,7 +62,7 @@ correct, in scope, measured, and small enough to review.
    effort is the most common waste here. Check upstream too; the fix may already exist there.
 3. **Keep it reviewable.** One concern per PR. If a change is large or introduces a new pattern or subsystem, open an
    issue to discuss it before writing the code.
-4. **Stay mergeable with upstream.** This fork rebases onto upstream `master`. Prefer small, local, clearly delimited
+4. **Stay mergeable with upstream.** This fork merges upstream `master` every 3 days and never rebases `master` (see `SYNC.md`). Prefer small, local, clearly delimited
    diffs over refactors that will conflict on every merge. Do not reformat untouched code.
 5. **Disclose.** Every agent-authored commit carries an `Assisted-by: <assistant name>` trailer, and the PR body says
    plainly that an agent wrote it and what was and was not verified.
@@ -115,7 +115,7 @@ All contributors must follow this flow for backend and performance work, regardl
     - `tests/corpus/correctness-code.txt`
     - `tests/corpus/correctness-structured.txt`
     - `tests/corpus/correctness-numeric.txt`
-    - Hash each corpus and use the same bytes for upstream and candidate. If more tokens are required, repeat the corpus deterministically and save the resulting prompt before either run.
+    - Hash each corpus and use the same bytes for upstream and candidate. Each corpus has more than 4096 tokens, so no repetition is needed at `-c 2048`; the four together have more than 2 x 16384 tokens with the Qwen 3.5 and Llama 3 vocabs, enough for `-c 16384` (`llama-perplexity` needs 2 x `n_ctx` tokens; see `tests/corpus/README.md`). A repeated text is mostly copied by the model and hides small errors.
 
 5. **Run the target model matrix**
     - Validate the current target model on every affected backend.
@@ -317,7 +317,7 @@ gh pr merge             # your own PR
 To conserve context space, load these resources as needed:
 
 Skills: reusable task workflows live in the [skills/](skills/) directory - check there for a skill matching your task
-before starting.
+before starting. [skills/README.md](skills/README.md) lists them; harnesses find them through the `.agents/skills/` and `.claude/skills/` symlinks.
 
 This repository:
 - [Contributing guidelines](CONTRIBUTING.md)
